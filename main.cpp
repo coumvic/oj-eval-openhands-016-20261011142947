@@ -91,6 +91,13 @@ private:
         for (int node_id : free_nodes) {
             file.write(reinterpret_cast<char*>(&node_id), sizeof(node_id));
         }
+        
+        // Pad the rest of the free nodes area
+        int max_free_nodes = 1000;
+        for (int i = free_count; i < max_free_nodes; ++i) {
+            int dummy = -1;
+            file.write(reinterpret_cast<char*>(&dummy), sizeof(dummy));
+        }
     }
     
     void read_header() {
@@ -100,14 +107,25 @@ private:
         
         int free_count;
         file.read(reinterpret_cast<char*>(&free_count), sizeof(free_count));
-        free_nodes.resize(free_count);
+        free_nodes.clear();
         for (int i = 0; i < free_count; ++i) {
-            file.read(reinterpret_cast<char*>(&free_nodes[i]), sizeof(free_nodes[i]));
+            int node_id;
+            file.read(reinterpret_cast<char*>(&node_id), sizeof(node_id));
+            if (node_id != -1) {
+                free_nodes.push_back(node_id);
+            }
+        }
+        
+        // Skip the rest of the free nodes area
+        int max_free_nodes = 1000;
+        for (int i = free_count; i < max_free_nodes; ++i) {
+            int dummy;
+            file.read(reinterpret_cast<char*>(&dummy), sizeof(dummy));
         }
     }
     
-    int get_header_size() {
-        return sizeof(root_id) + sizeof(next_node_id) + sizeof(int) + free_nodes.size() * sizeof(int);
+    int get_header_size() const {
+        return sizeof(root_id) + sizeof(next_node_id) + sizeof(int) + 1000 * sizeof(int); // Fixed max size for free nodes
     }
     
     int allocate_node() {
@@ -145,6 +163,10 @@ private:
     
     // B+ Tree operations
     void insert_into_leaf(Node& leaf, const char* key, int value) {
+        if (leaf.key_count >= LEAF_CAPACITY) {
+            return; // Leaf is full, should be handled by caller
+        }
+        
         int pos = 0;
         while (pos < leaf.key_count && compare_keys(leaf.leaf_keys[pos], key) < 0) {
             pos++;
@@ -166,12 +188,14 @@ private:
         
         // Shift elements to make space
         for (int i = leaf.key_count; i > pos; --i) {
-            strcpy(leaf.leaf_keys[i], leaf.leaf_keys[i - 1]);
+            strncpy(leaf.leaf_keys[i], leaf.leaf_keys[i - 1], MAX_KEY_LENGTH - 1);
+            leaf.leaf_keys[i][MAX_KEY_LENGTH - 1] = '\0';
             leaf.leaf_values[i] = leaf.leaf_values[i - 1];
         }
         
         // Insert new entry
-        strcpy(leaf.leaf_keys[pos], key);
+        strncpy(leaf.leaf_keys[pos], key, MAX_KEY_LENGTH - 1);
+        leaf.leaf_keys[pos][MAX_KEY_LENGTH - 1] = '\0';
         leaf.leaf_values[pos] = value;
         leaf.key_count++;
     }
@@ -187,7 +211,8 @@ private:
             if (leaf.leaf_values[pos] == value) {
                 // Found it, delete
                 for (int i = pos; i < leaf.key_count - 1; ++i) {
-                    strcpy(leaf.leaf_keys[i], leaf.leaf_keys[i + 1]);
+                    strncpy(leaf.leaf_keys[i], leaf.leaf_keys[i + 1], MAX_KEY_LENGTH - 1);
+                    leaf.leaf_keys[i][MAX_KEY_LENGTH - 1] = '\0';
                     leaf.leaf_values[i] = leaf.leaf_values[i + 1];
                 }
                 leaf.key_count--;
@@ -270,7 +295,8 @@ public:
             // Move half the entries to new leaf
             int split_point = current.key_count / 2;
             for (int i = split_point; i < current.key_count; ++i) {
-                strcpy(new_leaf.leaf_keys[i - split_point], current.leaf_keys[i]);
+                strncpy(new_leaf.leaf_keys[i - split_point], current.leaf_keys[i], MAX_KEY_LENGTH - 1);
+                new_leaf.leaf_keys[i - split_point][MAX_KEY_LENGTH - 1] = '\0';
                 new_leaf.leaf_values[i - split_point] = current.leaf_values[i];
             }
             new_leaf.key_count = current.key_count - split_point;
@@ -287,7 +313,8 @@ public:
                 new_root.parent = -1;
                 new_root.children[0] = current_id;
                 new_root.children[1] = current.next;
-                strcpy(new_root.keys[0], new_leaf.leaf_keys[0]);
+                strncpy(new_root.keys[0], new_leaf.leaf_keys[0], MAX_KEY_LENGTH - 1);
+                new_root.keys[0][MAX_KEY_LENGTH - 1] = '\0';
                 new_root.key_count = 1;
                 
                 int new_root_id = allocate_node();
